@@ -7,7 +7,7 @@ def test(test_dataloader, model_path):
 
     root =  os.path.dirname(__file__)
     cudnn.benchmark = True
-    batch_size = 64
+    batch_size = 32
     alpha = 0
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")

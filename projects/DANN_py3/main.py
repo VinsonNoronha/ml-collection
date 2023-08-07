@@ -1,7 +1,6 @@
 import random
 import os
 import torch
-import time 
 import logging 
 import numpy as np 
 import torch.backends.cudnn as cudnn
@@ -10,8 +9,7 @@ from model import CNNModel
 from torchvision import transforms
 from test import test
 from data_loader import create_dataloader
-import mlflow
-import mlflow.pytorch
+from torch.utils.tensorboard import SummaryWriter
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s:%(message)s",
@@ -19,67 +17,67 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-root=  os.path.dirname(__file__)
+experiment_name = "NWPU-RESISC45-AID"
+root= os.path.dirname(__file__)
 source_dataset_name = 'NWPU-RESISC45'
 target_dataset_name = 'AID'
-source_image_root = os.path.join(root, 'dataset', source_dataset_name)
-target_image_root = os.path.join(root, 'dataset', target_dataset_name)
-model_root = 'models'
-cudnn.benchmark = True
-learning_rate = 1e-3
-batch_size = 64
-image_size = 224
-n_epoch = 50
+log_dir = f"logs/{experiment_name}/run_1e-3_128"
+writer = SummaryWriter(log_dir)
 
-experiment_name="DANN-nwpu-aid"
-mlflow.set_experiment(experiment_name)
+if __name__ == '__main__':
 
-''' set device '''
+    source_image_root = os.path.join(root, 'dataset', source_dataset_name)
+    target_image_root = os.path.join(root, 'dataset', target_dataset_name)
+    model_root = os.path.join(root, 'models')
+    cudnn.benchmark = True
+    learning_rate = 1e-3
+    batch_size = 32
+    image_size = 224
+    n_epoch = 100
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print("device", device)
+    ''' set device '''
 
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print("device", device)
 
-random.seed(42) 
-torch.manual_seed(42)
-np.random.seed(42)
+    random.seed(42) 
+    torch.manual_seed(42)
+    np.random.seed(42)
 
-''' load data '''
+    ''' load data '''
 
-img_transform_source = transforms.Compose([
-    transforms.Resize(image_size,),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
+    img_transform_source = transforms.Compose([
+        transforms.Resize(image_size,),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
-img_transform_target = transforms.Compose([
-    transforms.Resize(image_size,),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
+    img_transform_target = transforms.Compose([
+        transforms.Resize(image_size,),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
-train_source, test_source = create_dataloader(dataset=source_image_root, transform=img_transform_source, batch_size=batch_size, train_ratio=0.8)
+    train_source, val_source, test_source = create_dataloader(dataset=source_image_root, transform=img_transform_source, batch_size=batch_size, train_ratio=0.7, validation_ratio=0.2)
 
-train_target, test_target = create_dataloader(dataset=target_image_root, transform=img_transform_target, batch_size=batch_size, train_ratio=0.8)
+    train_target, val_target, test_target = create_dataloader(dataset=target_image_root, transform=img_transform_target, batch_size=batch_size, train_ratio=0.7, validation_ratio=0.2)
 
-''' load model '''
+    ''' load model '''
 
-my_net = CNNModel()
+    my_net = CNNModel()
 
-for p in my_net.parameters():
-    p.requires_grad = True
+    for p in my_net.parameters():
+        p.requires_grad = True
 
-optimizer = optim.Adam(my_net.parameters(), lr=learning_rate)
+    optimizer = optim.Adam(my_net.parameters(), lr=learning_rate)
 
-loss_class = torch.nn.NLLLoss()
-loss_domain = torch.nn.NLLLoss()
+    loss_class = torch.nn.NLLLoss()
+    loss_domain = torch.nn.NLLLoss()
 
-best_accu_t = 0.0
-best_epoch = 0
-best_accu_s = 0.0
-with mlflow.start_run() as run:
-    mlflow.log_params({"Batch_size": batch_size,"Epochs": n_epoch,"Learning rate": learning_rate})
-    
+    best_accu_t = 0.0
+    best_epoch = 0
+    best_accu_s = 0.0
+
     my_net = my_net.to(device)
     loss_class = loss_class.to(device)
     loss_domain = loss_domain.to(device)
@@ -90,13 +88,14 @@ with mlflow.start_run() as run:
     total_samples_epoch = 0
 
     for epoch in range(n_epoch):
-        start_time = time.time()
         len_dataloader = min(len(train_source), len(train_target))
         data_source_iter = iter(train_source)
         data_target_iter = iter(train_target)
         model_path = ""
 
         for i in range(len_dataloader):
+
+            step = epoch * len_dataloader + i
 
             p = float(i + epoch * len_dataloader) / n_epoch / len_dataloader
             alpha = 2. / (1. + np.exp(-10 * p)) - 1
@@ -105,7 +104,11 @@ with mlflow.start_run() as run:
             data_source = next(data_source_iter)
             s_img, s_label = data_source
 
+            # s_grid = make_grid(s_img, nrow=6, normalize=True)
+            # writer.add_image("soruce batch images", s_grid, global_step=step)
+
             my_net.zero_grad()
+
             batch_size = s_label.size(0)
 
             domain_label = torch.zeros(batch_size).long() # set to 0 as it belongs to source domain 
@@ -121,6 +124,9 @@ with mlflow.start_run() as run:
             # training model using target data
             data_target = next(data_target_iter)
             t_img, _ = data_target
+
+            # t_grid = make_grid(t_img, nrow=6, normalize=True)
+            # writer.add_image("Target batch images", t_grid, global_step=step)
 
             batch_size = t_img.size(0)
 
@@ -140,16 +146,17 @@ with mlflow.start_run() as run:
             correct_class_batch += pred_class.eq(s_label).sum().item()
             total_samples_batch += s_label.size(0)
             
-            batch_accuracy = 100.0 * correct_class_batch / total_samples_batch
-
-            logging.info("Batch n.o.={0}\t Loss={1:.4f}\t Batch_acc={2:.4f}\r".format(i, err.item(), batch_accuracy))
+            if i % 10 == 0:
+                batch_accuracy =  correct_class_batch / total_samples_batch
+                writer.add_scalar("Batch accuracy", batch_accuracy, global_step=step)
+                logging.info("Batch: {0}\t source domain loss: {1:.4f}\t target domain loss: {2:.4f}\t Combined Loss: {3:.4f}\t Batch Accuracy: {4:.4f}\r".format(i, err_s_domain.item(), err_t_domain.item(), err.item(), batch_accuracy))
 
             model_path = '{0}/nwpu_aid_epoch_current.pth'.format(model_root)
             torch.save(my_net, model_path)
         
-        epoch_accuracy = 100.0 * correct_class_batch / total_samples_batch
-        mlflow.log_metric("Epoch Accuracy", epoch_accuracy, step=epoch)
-        logging.info("Epoch = {0}\t Epoch Accuracy={1:.4f}\r".format(epoch, epoch_accuracy))
+        epoch_accuracy = correct_class_batch / total_samples_batch
+        writer.add_scalar("Epoch accuracy ", epoch_accuracy, global_step=epoch)
+        logging.info("Epoch: {0}\t Epoch Accuracy: {1:.4f}\r".format(epoch, epoch_accuracy))
                 
         correct_class_epoch += correct_class_batch
         total_samples_epoch += total_samples_batch
@@ -158,16 +165,16 @@ with mlflow.start_run() as run:
         correct_class_batch = 0
         total_samples_batch = 0
 
-        accu_s = test(test_source, model_path)
-        mlflow.log_metric("Test Accuracy source", accu_s, step=epoch)
-        print('Accuracy of the %s dataset: %f' % ('NWPU', accu_s))
-        accu_t = test(test_target, model_path)
-        mlflow.log_metric("Test Accuracy target", accu_t, step=epoch)
-        print('Accuracy of the %s dataset: %f\n' % ('AID', accu_t))
+        if epoch % 5 == 0 or epoch != 0:
+            accu_s = test(val_source, model_path)
+            writer.add_scalar("Test accouracy source", accu_s, global_step=epoch)
+            logging.info("Accuracy of the {0} dataset: {1:.4f}".format(source_dataset_name, accu_s))
+            accu_t = test(val_target, model_path)
+            writer.add_scalar("Epoch accuracy", accu_t, global_step=epoch)
+            logging.info("Accuracy of the {0} dataset: {1:.4f}".format('AID', accu_t))
 
         if accu_t > best_accu_t:
-            best_accu_s = accu_s
             best_accu_t = accu_t
             best_epoch = epoch
-            torch.save(my_net, '{0}/nwpu_aid_epoch-{3}__accuracy-t-{1}_accuracy-s-{2}.pth'.format(model_root, best_accu_t, best_accu_s, best_epoch))
-            mlflow.pytorch.log_model(my_net, artifact_path="DANN_{0}_{1}_{2}".format(best_accu_t, best_accu_s, best_epoch), code_paths=["main.py", "test.py", "data_loader.py", "functions.py", "model.py"])
+            torch.save(my_net, '{0}/{1}_{2}_{3}.pth'.format(model_root, experiment_name,  best_accu_t, best_epoch))
+    writer.close()

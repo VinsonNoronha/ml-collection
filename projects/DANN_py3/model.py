@@ -9,7 +9,7 @@ class CNNModel(nn.Module):
         super(CNNModel, self).__init__()
         self.feature_extractor = EfficientNet.from_pretrained('efficientnet-b0')
         num_features = self.feature_extractor._fc.in_features
-        self.feature_extractor._fc = nn.Identity()  # Remove the last fully connected layer
+        self.feature_extractor._fc = nn.Identity()  
 
         self.class_classifier = nn.Sequential(
             nn.Linear(num_features, 100),

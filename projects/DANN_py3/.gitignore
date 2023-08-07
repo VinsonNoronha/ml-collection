@@ -7,3 +7,5 @@ dataset/*
 *.txt
 *.png
 mlruns/*
+logs/*
+utils.py
